@@ -1798,6 +1798,32 @@ redis_sock_create(char *host, int host_len, int port,
     return redis_sock;
 }
 
+static int
+redis_sock_check_liveness(RedisSock *redis_sock)
+{
+    char *cmd, *response;
+    int result = FAILURE, cmd_len, response_len;
+    zend_string *uniqid;
+    struct timeval tv;
+
+    gettimeofday(&tv, NULL);
+    uniqid = strpprintf(0, "%08x%05x", tv.tv_sec, tv.tv_usec);
+    cmd_len = redis_spprintf(redis_sock, NULL, &cmd, "PING", "S", uniqid);
+    zend_string_release(uniqid);
+
+    if (redis_sock_write(redis_sock, cmd, cmd_len) > 0 &&
+        (response = redis_sock_read(redis_sock, &response_len)) != NULL
+    ) {
+        /* check that response is equal to command argument */
+        if (cmd_len > response_len && !strcmp(&cmd[cmd_len - response_len], response)) {
+            result = SUCCESS;
+        }
+        efree(response);
+    }
+    efree(cmd);
+    return result;
+}
+
 /**
  * redis_sock_connect
  */
@@ -1843,8 +1869,8 @@ PHP_REDIS_API int redis_sock_connect(RedisSock *redis_sock)
             if (zend_llist_count(&p->list) > 0) {
                 redis_sock->stream = *(php_stream **)zend_llist_get_last(&p->list);
                 zend_llist_remove_tail(&p->list);
-                /* Check socket liveness using 0 second timeout */
-                if (php_stream_set_option(redis_sock->stream, PHP_STREAM_OPTION_CHECK_LIVENESS, 0, NULL) == PHP_STREAM_OPTION_RETURN_OK) {
+
+                if (redis_sock_check_liveness(redis_sock) == SUCCESS) {
                     redis_sock->status = REDIS_SOCK_STATUS_CONNECTED;
                     return SUCCESS;
                 }
