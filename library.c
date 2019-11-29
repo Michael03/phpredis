@@ -118,8 +118,7 @@ redis_sock_auth(RedisSock *redis_sock)
     char *cmd, *response;
     int cmd_len, response_len;
 
-    cmd_len = redis_spprintf(redis_sock, NULL, &cmd, "AUTH", "s",
-                             ZSTR_VAL(redis_sock->auth), ZSTR_LEN(redis_sock->auth));
+    cmd_len = redis_spprintf(redis_sock, NULL, &cmd, "AUTH", "S", redis_sock->auth);
 
     if (redis_sock_write(redis_sock, cmd, cmd_len) < 0) {
         efree(cmd);
@@ -1801,26 +1800,32 @@ redis_sock_create(char *host, int host_len, int port,
 static int
 redis_sock_check_liveness(RedisSock *redis_sock)
 {
-    char *cmd, *response;
-    int result = FAILURE, cmd_len, response_len;
+    char *response;
+    int result = FAILURE, response_len;
     zend_string *uniqid;
+    smart_string cmd = {0};
     struct timeval tv;
 
+    if (redis_sock->auth) {
+        redis_cmd_init_sstr(&cmd, 1, "AUTH", sizeof("AUTH") - 1);
+        redis_cmd_append_sstr(&cmd, ZSTR_VAL(redis_sock->auth), ZSTR_LEN(redis_sock->auth));
+    }
     gettimeofday(&tv, NULL);
-    uniqid = strpprintf(0, "%08x%05x", tv.tv_sec, tv.tv_usec);
-    cmd_len = redis_spprintf(redis_sock, NULL, &cmd, "PING", "S", uniqid);
+    uniqid = strpprintf(0, "%08lx%05lx", tv.tv_sec, tv.tv_usec);
+    redis_cmd_init_sstr(&cmd, 1, "PING", sizeof("PING") - 1);
+    redis_cmd_append_sstr(&cmd, ZSTR_VAL(uniqid), ZSTR_LEN(uniqid));
+    smart_string_0(&cmd);
     zend_string_release(uniqid);
-
-    if (redis_sock_write(redis_sock, cmd, cmd_len) > 0 &&
+    if (redis_sock_write(redis_sock, cmd.c, cmd.len) > 0 &&
         (response = redis_sock_read(redis_sock, &response_len)) != NULL
     ) {
         /* check that response is equal to command argument */
-        if (cmd_len > response_len && !strcmp(&cmd[cmd_len - response_len], response)) {
+        if (cmd.len > response_len && !strcmp(&cmd.c[cmd.len - response_len], response)) {
             result = SUCCESS;
         }
         efree(response);
     }
-    efree(cmd);
+    smart_string_free(&cmd);
     return result;
 }
 
